@@ -11,13 +11,19 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
   const authService = inject(AuthService);
   const token = authService.getToken();
 
-  // Si existe un token de sesión en memoria, inyectar cabecera Authorization
+  // Si existe un token de sesión en memoria, inyectar cabecera Authorization y registrar auditoría
   if (token) {
     const authReq = req.clone({
       setHeaders: {
         Authorization: `Bearer ${token}`,
+        'X-Client-Environment': 'EnterpriseHub-PWA-v1.5',
       },
     });
+    authService.recordAudit(
+      'INTERCEPTOR',
+      'SUCCESS',
+      `authInterceptor: Cabecera Authorization Bearer inyectada en petición HTTP (${req.method} ${req.url}).`
+    );
     return next(authReq);
   }
 

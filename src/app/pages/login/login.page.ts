@@ -108,24 +108,24 @@ addIcons({
               <div class="pipe-step">
                 <div class="pipe-num">01</div>
                 <div class="pipe-body">
-                  <h3>Estado Reactivo con Signals (AuthService)</h3>
-                  <p><code>_currentUser = signal&lt;UserSession | null&gt;()</code> expone <code>currentUser</code> de solo lectura y el selector computado <code>isAuthenticated = computed(...)</code>.</p>
+                  <h3>Estado Reactivo &amp; Flujo Asíncrono (Signals + RxJS)</h3>
+                  <p><code>resolveSession$(): Observable&lt;UserSession | null&gt;</code> sobre <code>isHydrated$</code> elimina lecturas síncronas (<code>getSnapshot()</code>) y condiciones de carrera al recargar con F5.</p>
                 </div>
               </div>
 
               <div class="pipe-step">
                 <div class="pipe-num">02</div>
                 <div class="pipe-body">
-                  <h3>Web Storage API (sessionStorage)</h3>
-                  <p>Sincronización automática bajo la clave <code>DAM2_AUTH_SESSION</code> con lectura protegida por bloque <code>try/catch</code> contra corrupción de JSON.</p>
+                  <h3>Perímetro Seguro canMatch + NoPreloading</h3>
+                  <p>Protección en fase de coincidencia (<code>canMatch</code>) que bloquea la descarga de red de los bundles JS (<code>loadComponent</code>) antes de autorizar la sesión.</p>
                 </div>
               </div>
 
               <div class="pipe-step">
                 <div class="pipe-num">03</div>
                 <div class="pipe-body">
-                  <h3>Guardas Funcionales (authGuard + roleGuard)</h3>
-                  <p>Factoría <code>roleGuard('admin' | 'user')</code> que aisla <code>/admin</code> y <code>/user-dashboard</code> devolviendo un <code>UrlTree</code> atómico.</p>
+                  <h3>Destrucción física DOM (*hasRole) &amp; HttpInterceptors</h3>
+                  <p>Directiva estructural con <code>ViewContainerRef.clear()</code> e inyección centralizada de <code>Bearer JWT</code> vía <code>provideHttpClient(withInterceptors(...))</code>.</p>
                 </div>
               </div>
             </div>
@@ -135,14 +135,14 @@ addIcons({
               <div class="probe-header">
                 <span class="probe-title">
                   <ion-icon name="shield-checkmark-outline"></ion-icon>
-                  Prueba de Intercepción Perimetral (authGuard)
+                  Prueba de Intercepción Perimetral canMatch (authGuard)
                 </span>
                 <span class="probe-return-badge" *ngIf="currentReturnUrl">
                   returnUrl detectado: {{ currentReturnUrl }}
                 </span>
               </div>
               <p class="probe-desc">
-                Pulsa para intentar navegar a <code>/admin</code> sin iniciar sesión y verificar cómo <code>authGuard</code> bloquea el acceso y adjunta <code>?returnUrl=%2Fdashboard</code>:
+                Pulsa para intentar navegar a <code>/dashboard</code> sin sesión y verificar cómo <code>canMatch</code> bloquea la descarga del chunk JS y redirige con <code>?returnUrl=%2Fdashboard</code>:
               </p>
               <button
                 type="button"

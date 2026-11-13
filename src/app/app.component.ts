@@ -117,7 +117,7 @@ addIcons({
                   <ion-icon name="stats-chart-outline"></ion-icon>
                   <div class="drawer-link-text">
                     <span class="link-title">NOC Command Center</span>
-                    <span class="link-caption">Protegido: roleGuard('admin')</span>
+                    <span class="link-caption">canMatch: roleGuard(['ADMIN'])</span>
                   </div>
                 </a>
               </ion-menu-toggle>
@@ -131,7 +131,7 @@ addIcons({
                   <ion-icon name="person-outline"></ion-icon>
                   <div class="drawer-link-text">
                     <span class="link-title">Workstation Operador</span>
-                    <span class="link-caption">Protegido: roleGuard('user')</span>
+                    <span class="link-caption">canMatch: roleGuard(['USER'])</span>
                   </div>
                 </a>
               </ion-menu-toggle>
@@ -271,7 +271,7 @@ addIcons({
         aria-label="Navegación rápida móvil"
       >
         <a
-          *ngIf="authService.currentUser()?.role === 'admin'"
+          *hasRole="['ADMIN']"
           routerLink="/dashboard"
           routerLinkActive="dock-item--active"
           class="dock-item"

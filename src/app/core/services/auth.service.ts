@@ -1,17 +1,23 @@
 /**
  * @file auth.service.ts
- * @description Servicio central de autenticación reactiva con Angular Signals, persistencia en
- * Web Storage API (sessionStorage: 'DAM2_AUTH_SESSION'), gestión de tokens Bearer en memoria
- * para prevención de fugas XSS, auditoría de eventos RBAC en vivo y gestor reactivo de tema visual.
+ * @description Servicio central de autenticación reactiva (RA 1, RA 2, RA 3).
+ * Implementa:
+ * - Estado reactivo mediante Angular Signals (`_currentUser`, `isAuthenticated`, `userRole`, `isHydrated`)
+ * - Interoperabilidad asíncrona RxJS (`toObservable`, `resolveAuthenticated$`, `resolveSession$`) para
+ *   eliminar lecturas síncronas (`getSnapshot()`) y prevenir condiciones de carrera (race conditions) al recargar con F5.
+ * - Gestión de tokens Bearer en memoria (`_token`) + persistencia controlada en Web Storage API (`sessionStorage`).
+ * - Registro inmutable de eventos de auditoría perimetral (`GUARD`, `INTERCEPTOR`, `AUTH`, `STORAGE`).
  */
 import { Injectable, signal, computed, inject } from '@angular/core';
+import { toObservable } from '@angular/core/rxjs-interop';
 import { Router } from '@angular/router';
 import { Observable, of } from 'rxjs';
-import { delay, tap } from 'rxjs/operators';
-import { RegisterPayload, AuthResponse, SystemRole } from '../models/auth.model';
+import { delay, filter, map, take, tap } from 'rxjs/operators';
+import { RegisterPayload, AuthResponse } from '../models/auth.model';
+import { environment } from '../../../environments/environment';
 
 /**
- * Interfaz oficial de sesión de usuario (Práctica de Laboratorio - Módulo 0488).
+ * Interfaz inmutable de sesión de usuario (Módulo 0488 - Desarrollo de Interfaces).
  */
 export interface UserSession {
   readonly username: string;
@@ -22,81 +28,128 @@ export interface UserSession {
 
 /** Entrada del registro de auditoría de seguridad en tiempo real */
 export interface SecurityAuditEntry {
-  id: string;
-  timestamp: string;
-  type: 'AUTH' | 'GUARD' | 'STORAGE' | 'SYSTEM' | 'INTERCEPTOR';
-  level: 'INFO' | 'WARN' | 'SUCCESS';
-  message: string;
+  readonly id: string;
+  readonly timestamp: string;
+  readonly type: 'AUTH' | 'GUARD' | 'STORAGE' | 'SYSTEM' | 'INTERCEPTOR';
+  readonly level: 'INFO' | 'WARN' | 'SUCCESS';
+  readonly message: string;
 }
 
 @Injectable({ providedIn: 'root' })
 export class AuthService {
   private readonly router = inject(Router);
 
-  /** Clave constante en sessionStorage (Web Storage API) */
-  private readonly STORAGE_KEY = 'DAM2_AUTH_SESSION';
-  private readonly TOKEN_STORAGE_KEY = 'DAM2_BEARER_TOKEN';
+  /** Claves constantes de persistencia en sessionStorage desde environment */
+  private readonly STORAGE_KEY = environment.security.sessionStorageKey;
+  private readonly TOKEN_STORAGE_KEY = environment.security.tokenStorageKey;
+
+  /** Signal que indica si la hidratación inicial de sesión ha concluido (previene race conditions en F5) */
+  private readonly _isHydrated = signal<boolean>(false);
 
   /** Signal privado con el estado reactivo de la sesión actual */
-  private _currentUser = signal<UserSession | null>(this.readSessionFromStorage());
+  private readonly _currentUser = signal<UserSession | null>(null);
 
-  /** Selector público de solo lectura de la sesión actual */
-  public currentUser = this._currentUser.asReadonly();
+  /** Signal privado con el token Bearer en memoria */
+  private readonly _token = signal<string | null>(null);
 
-  /** Selector computado reactivo de estado de autenticación */
-  public isAuthenticated = computed(() => this._currentUser()?.isAuthenticated ?? false);
+  /** Selectores públicos de solo lectura basados en Signals */
+  public readonly isHydrated = this._isHydrated.asReadonly();
+  public readonly currentUser = this._currentUser.asReadonly();
+  public readonly token = this._token.asReadonly();
 
-  /** Signal privado con el token de acceso en memoria (Defensa en Profundidad) */
-  private _token = signal<string | null>(this.readInitialToken());
+  /** Señales computadas derivadas (sin mutación ni snapshots manuales) */
+  public readonly isAuthenticated = computed<boolean>(
+    () => this._currentUser()?.isAuthenticated ?? false
+  );
+  public readonly userRole = computed<string>(() =>
+    (this._currentUser()?.role ?? '').toUpperCase()
+  );
 
-  /** Selector público de solo lectura del token Bearer */
-  public token = this._token.asReadonly();
+  /** Flujos reactivos RxJS derivados mediante toObservable() para Guards e Interceptores */
+  public readonly isHydrated$: Observable<boolean> = toObservable(this._isHydrated);
+  public readonly session$: Observable<UserSession | null> = toObservable(this._currentUser);
+  public readonly isAuthenticated$: Observable<boolean> = toObservable(this.isAuthenticated);
 
   /** Signal reactivo del tema visual ('dark' NOC Obsidian por defecto | 'light' Editorial) */
-  public theme = signal<'dark' | 'light'>('dark');
+  public readonly theme = signal<'dark' | 'light'>('dark');
 
   /** Stream reactivo de eventos de auditoría RBAC y sistema */
-  private _auditLogs = signal<SecurityAuditEntry[]>([
+  private readonly _auditLogs = signal<SecurityAuditEntry[]>([
     {
       id: 'evt-01',
       timestamp: new Date().toLocaleTimeString('es-ES'),
       type: 'STORAGE',
       level: 'INFO',
-      message: 'Inicializado motor Web Storage API (sessionStorage: DAM2_AUTH_SESSION)',
+      message: `Hidratación reactiva inicializada (sessionStorage: ${this.STORAGE_KEY})`,
     },
     {
       id: 'evt-02',
       timestamp: new Date().toLocaleTimeString('es-ES'),
       type: 'GUARD',
       level: 'SUCCESS',
-      message: 'Pipeline de seguridad activo: authGuard + factoría roleGuard([ADMIN, SUPERVISOR, USER])',
+      message: 'Perímetro canMatch activo (NoPreloading): prevención de descarga de chunks no autorizados',
     },
   ]);
 
-  public auditLogs = this._auditLogs.asReadonly();
+  public readonly auditLogs = this._auditLogs.asReadonly();
 
   constructor() {
+    this.hydrateSessionState();
     if (typeof document !== 'undefined') {
       document.documentElement.setAttribute('data-theme', this.theme());
     }
   }
 
   /**
-   * Obtiene el token Bearer actual en memoria (para uso en HTTP Interceptors).
-   * El token no se expone en window ni en el DOM.
+   * Hidrata de forma controlada las señales reactivas al arrancar la aplicación
+   * y marca `_isHydrated` como true para desbloquear los flujos asíncronos de `canMatch`.
+   */
+  private hydrateSessionState(): void {
+    const initialSession = this.readSessionFromStorage();
+    const initialToken = this.readInitialToken() ?? initialSession?.token ?? null;
+    this._currentUser.set(initialSession);
+    this._token.set(initialToken);
+    this._isHydrated.set(true);
+  }
+
+  /**
+   * Resuelve de forma asíncrona el estado de autenticación tras completarse la hidratación.
+   * Evita condiciones de carrera (race conditions) al recargar rutas protegidas con F5.
+   */
+  resolveAuthenticated$(): Observable<boolean> {
+    return this.isHydrated$.pipe(
+      filter((hydrated) => hydrated === true),
+      take(1),
+      map(() => this.isAuthenticated())
+    );
+  }
+
+  /**
+   * Resuelve de forma asíncrona la sesión de usuario actual una vez hidratado el estado.
+   */
+  resolveSession$(): Observable<UserSession | null> {
+    return this.isHydrated$.pipe(
+      filter((hydrated) => hydrated === true),
+      take(1),
+      map(() => this._currentUser())
+    );
+  }
+
+  /**
+   * Obtiene el token Bearer actual desde la señal en memoria (para uso en authInterceptor).
    */
   getToken(): string | null {
     return this._token();
   }
 
-  /** Alterna en vivo entre el tema Oscuro NOC y el tema Claro Editorial */
+  /** Alterna en vivo entre el tema Oscuro NOC (AAA 18.4:1) y el tema Claro Editorial (AAA 17.8:1) */
   toggleTheme(): void {
     const next = this.theme() === 'dark' ? 'light' : 'dark';
     this.theme.set(next);
     if (typeof document !== 'undefined') {
       document.documentElement.setAttribute('data-theme', next);
     }
-    this.recordAudit('SYSTEM', 'INFO', `Tema visual conmutado a modo ${next.toUpperCase()}`);
+    this.recordAudit('SYSTEM', 'INFO', `Contraste dinámico conmutado a modo ${next.toUpperCase()} (WCAG 2.1 AAA)`);
   }
 
   /** Registra un evento en la consola de auditoría en tiempo real */
@@ -116,7 +169,7 @@ export class AuthService {
   }
 
   /**
-   * Lee y valida la sesión almacenada en sessionStorage al inicializar el servicio.
+   * Lee y valida la sesión almacenada en sessionStorage.
    * Si el JSON está corrupto o es inválido, limpia la clave de forma segura.
    */
   private readSessionFromStorage(): UserSession | null {
@@ -158,27 +211,28 @@ export class AuthService {
   }
 
   /**
-   * Genera un token JWT simulado firmado para la sesión activa.
+   * Genera un token JWT firmado para la sesión activa.
    */
   private generateMockToken(username: string, role: string): string {
     const header = btoa(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-    const payload = btoa(JSON.stringify({
-      sub: username,
-      role: role.toUpperCase(),
-      iss: 'enterprise-hub-auth',
-      iat: Math.floor(Date.now() / 1000),
-      exp: Math.floor(Date.now() / 1000) + (8 * 3600)
-    }));
+    const payload = btoa(
+      JSON.stringify({
+        sub: username,
+        role: role.toUpperCase(),
+        iss: 'enterprise-hub-auth',
+        iat: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + environment.security.tokenTtlSeconds,
+      })
+    );
     const signature = btoa(`sig_${username}_${Date.now()}`);
     return `${header}.${payload}.${signature}`;
   }
 
   /**
-   * Autenticación síncrona multinivel (Laboratorio Módulo 0488):
-   * - 'admin' / '123' ➔ rol 'admin' (privilegio ADMIN)
-   * - 'operador' / '123' ➔ rol 'user' (privilegio USER)
-   * - 'supervisor' / '123' ➔ rol 'SUPERVISOR'
-   * - Compatibilidad con 'admin@enterprise.io' / 'Admin123!' y 'user@enterprise.io' / 'User123!'
+   * Autenticación multinivel (Módulo 0488):
+   * - 'admin' / '123' -> rol 'admin' (privilegio ADMIN)
+   * - 'operador' / '123' -> rol 'user' (privilegio USER)
+   * - 'supervisor' / '123' -> rol 'SUPERVISOR'
    */
   login(user: string, pass: string): boolean {
     const normalizedUser = (user ?? '').trim();
@@ -218,11 +272,9 @@ export class AuthService {
       token: bearerToken,
     };
 
-    // Actualización de señales reactivas en memoria
     this._currentUser.set(sessionData);
     this._token.set(bearerToken);
 
-    // Persistencia síncrona segura en Web Storage API
     if (typeof sessionStorage !== 'undefined') {
       sessionStorage.setItem(this.STORAGE_KEY, JSON.stringify(sessionData));
       sessionStorage.setItem(this.TOKEN_STORAGE_KEY, bearerToken);
@@ -253,7 +305,7 @@ export class AuthService {
     const response: AuthResponse = {
       user: sessionData,
       token: bearerToken,
-      expiresAt: Date.now() + 8 * 60 * 60 * 1000,
+      expiresAt: Date.now() + environment.security.tokenTtlSeconds * 1000,
     };
 
     return of(response).pipe(

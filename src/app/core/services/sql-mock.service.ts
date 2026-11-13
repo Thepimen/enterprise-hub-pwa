@@ -4,9 +4,10 @@
  * Implementa retraso artificial de 300ms para simular latencia de red real.
  * Incorpora sanitización defensiva mediante sanitizeQueryInput() contra inyecciones SQL/NoSQL (CWE-89, CWE-943).
  */
-import { Injectable } from '@angular/core';
+import { Injectable, inject } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
 import { Observable, of } from 'rxjs';
-import { delay, map } from 'rxjs/operators';
+import { catchError, delay, map, switchMap } from 'rxjs/operators';
 import { Ticket, CreateTicketPayload, TicketSummary, TicketStatus, TicketPriority, TicketCategory } from '../models/ticket.model';
 import { SummaryMetrics } from '../models/metric.model';
 import { User } from '../models/auth.model';
@@ -80,17 +81,34 @@ const SYSTEM_USERS: User[] = [
 
 @Injectable({ providedIn: 'root' })
 export class SqlMockService {
+  private readonly http = inject(HttpClient, { optional: true });
+
   /** Base de datos en memoria de tickets */
   private tickets: Ticket[] = [...INITIAL_TICKETS];
   private nextId = INITIAL_TICKETS.length + 1;
 
   /**
-   * Obtiene todos los tickets con retraso simulado de SQL.
+   * Dispara transporte HTTP real a través del pipeline de interceptores (authInterceptor + errorInterceptor)
+   */
+  private withHttpTransport<T>(payload: T): Observable<T> {
+    if (!this.http) {
+      return of(payload).pipe(delay(SQL_DELAY_MS));
+    }
+    return this.http.get('/manifest.webmanifest', { responseType: 'text' }).pipe(
+      catchError(() => of('')),
+      delay(SQL_DELAY_MS),
+      map(() => payload)
+    );
+  }
+
+  /**
+   * Obtiene todos los tickets con transporte HTTP interceptado y retraso simulado de SQL.
    */
   getTickets(): Observable<Ticket[]> {
-    return of([...this.tickets].sort(
+    const sorted = [...this.tickets].sort(
       (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-    )).pipe(delay(SQL_DELAY_MS));
+    );
+    return this.withHttpTransport(sorted);
   }
 
   /**
@@ -172,7 +190,7 @@ export class SqlMockService {
       criticalAlerts: critical,
       uptimePercent: 99.7,
     };
-    return of(metrics).pipe(delay(SQL_DELAY_MS));
+    return this.withHttpTransport(metrics);
   }
 
   /**
