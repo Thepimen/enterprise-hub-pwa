@@ -1,7 +1,12 @@
 /**
  * @file app.routes.ts
- * @description Configuración central de rutas con Lazy Loading (loadComponent) y Functional Guards.
- * Integra la nueva Landing Page (/welcome) como punto de entrada raíz y control granular por roles.
+ * @description Árbol de enrutamiento central con Lazy Loading seguro (`loadComponent`) y perímetro `canMatch` (RA 1).
+ *
+ * ARQUITECTURA DE SEGURIDAD PERIMETRAL (Defensa frente a descarga de bundles no autorizados):
+ * - Todas las rutas protegidas implementan `canMatch` en lugar de depender exclusivamente de `canActivate`.
+ * - En combinación con `withPreloading(NoPreloading)` en `app.config.ts` / `main.ts`, el navegador
+ *   NO descarga por red los chunks JavaScript de administración (`dashboard-page`) ni de operaciones
+ *   hasta que `authGuard` y `roleGuard` resuelven positivamente el flujo asíncrono `Observable<boolean | UrlTree>`.
  */
 import { Routes } from '@angular/router';
 import { authGuard } from './core/guards/auth.guard';
@@ -30,7 +35,7 @@ export const routes: Routes = [
   },
   {
     path: 'dashboard',
-    canActivate: [authGuard, roleGuard(['ADMIN'])],
+    canMatch: [authGuard, roleGuard(['ADMIN'])],
     loadComponent: () => import('./pages/dashboard/dashboard.page').then((m) => m.DashboardPage),
     title: 'Telemetría de Clúster | EnterpriseHub',
   },
@@ -41,20 +46,20 @@ export const routes: Routes = [
   },
   {
     path: 'tickets',
-    canActivate: [authGuard, roleGuard(['ADMIN', 'SUPERVISOR', 'USER'])],
+    canMatch: [authGuard, roleGuard(['ADMIN', 'SUPERVISOR', 'USER'])],
     loadComponent: () => import('./pages/tickets/tickets.page').then((m) => m.TicketsPage),
     title: 'Gestión de Incidencias | EnterpriseHub',
   },
   {
     path: 'user-dashboard',
-    canActivate: [authGuard, roleGuard(['USER'])],
+    canMatch: [authGuard, roleGuard(['USER'])],
     loadComponent: () =>
       import('./pages/user-dashboard/user-dashboard.page').then((m) => m.UserDashboardPage),
     title: 'Panel de Operador | EnterpriseHub',
   },
   {
     path: 'help',
-    canActivate: [authGuard],
+    canMatch: [authGuard],
     loadComponent: () => import('./pages/help/help.page').then((m) => m.HelpPage),
     title: 'Documentación y Ayuda | EnterpriseHub',
   },

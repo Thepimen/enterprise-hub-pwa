@@ -158,7 +158,7 @@ addIcons({
           <div class="ribbon-left">
             <span class="guard-pill">
               <ion-icon name="shield-checkmark-outline"></ion-icon>
-              canActivate: [authGuard, roleGuard('user')]
+              canMatch: [authGuard, roleGuard(['USER'])]
             </span>
             <span class="storage-pill mono">STORAGE_KEY: DAM2_AUTH_SESSION</span>
           </div>
