@@ -82,7 +82,7 @@ type TelemetryMode = 'combined' | 'cpu' | 'ram' | 'iops';
           <div class="noc-brand-title">
             <span class="noc-live-pip"></span>
             <span class="noc-title-text">NOC Command Deck</span>
-            <span class="noc-guard-chip">roleGuard('admin')</span>
+            <span class="noc-guard-chip">canMatch: roleGuard(['ADMIN'])</span>
           </div>
         </ion-buttons>
 
@@ -531,19 +531,19 @@ type TelemetryMode = 'combined' | 'cpu' | 'ram' | 'iops';
                   </div>
                 </div>
 
-                <!-- Matriz de Permisos por Ruta -->
+                <!-- Matriz de Permisos por Ruta (Perímetro canMatch + NoPreloading) -->
                 <div class="perm-matrix">
                   <div class="perm-row">
-                    <code>/admin</code>
-                    <span class="perm-tag perm-allow">ALLOW · roleGuard('admin')</span>
+                    <code>/dashboard</code>
+                    <span class="perm-tag perm-allow">ALLOW · canMatch [ADMIN]</span>
                   </div>
                   <div class="perm-row">
                     <code>/tickets</code>
-                    <span class="perm-tag perm-allow">ALLOW · authGuard</span>
+                    <span class="perm-tag perm-allow">ALLOW · canMatch [RBAC]</span>
                   </div>
                   <div class="perm-row">
                     <code>/user-dashboard</code>
-                    <span class="perm-tag perm-redirect">UrlTree ➔ /admin</span>
+                    <span class="perm-tag perm-redirect">UrlTree ➔ /tickets</span>
                   </div>
                 </div>
 

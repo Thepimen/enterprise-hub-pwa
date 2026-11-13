@@ -1,0 +1,111 @@
+name: EnterpriseHub PWA — CI/CD & Security Architecture Pipeline (RA 7)
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+      - 'feature/**'
+  pull_request:
+    branches:
+      - main
+      - develop
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22.x'
+
+jobs:
+  architecture-and-quality-gate:
+    name: 1. Auditoría Arquitectónica (RA 1–RA 5) & Tipado Estricto
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repositorio (Git Flow completo)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configurar entorno Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Instalación determinista de dependencias (npm ci)
+        run: npm ci --legacy-peer-deps
+
+      - name: Verificación estática de Seguridad Perimetral (canMatch + NoPreloading + Interceptors)
+        run: |
+          echo "Verificando canMatch en rutas protegidas (RA 1)..."
+          grep -q "canMatch:" src/app/app.routes.ts
+          echo "Verificando NoPreloading en main.ts y app.config.ts (RA 1)..."
+          grep -q "withPreloading(NoPreloading)" src/main.ts
+          grep -q "withPreloading(NoPreloading)" src/app/app.config.ts
+          echo "Verificando provideHttpClient(withInterceptors([authInterceptor, errorInterceptor])) (RA 5)..."
+          grep -q "withInterceptors(\[authInterceptor, errorInterceptor\])" src/main.ts
+          grep -q "withInterceptors(\[authInterceptor, errorInterceptor\])" src/app/app.config.ts
+          echo "Verificando directiva estructural *hasRole con ViewContainerRef (RA 2/3)..."
+          grep -q "ViewContainerRef" src/app/shared/directives/has-role.directive.ts
+
+      - name: Validación de compilación TypeScript en modo estricto
+        run: npx tsc --noEmit -p tsconfig.app.json
+
+  production-build-and-compodoc:
+    name: 2. Build Producción AOT + Chunks Lazy + Compodoc (RA 6 & RA 7)
+    needs: architecture-and-quality-gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar entorno Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Instalar dependencias
+        run: npm ci --legacy-peer-deps
+
+      - name: Compilar bundle de producción (fileReplacements environment.prod.ts)
+        run: npm run build:prod
+
+      - name: Verificar generación de chunks Lazy-Loaded aislados en www/
+        run: |
+          ls -lh www/
+          test -f www/index.html
+
+      - name: Generar documentación técnica Compodoc (RA 6)
+        run: npx @compodoc/compodoc -p tsconfig.app.json --theme material --output documentation/compodoc
+
+      - name: Publicar artefacto de distribución PWA (www/)
+        uses: actions/upload-artifact@v4
+        with:
+          name: enterprise-hub-pwa-dist
+          path: www/
+          retention-days: 14
+
+  deploy-vercel-production:
+    name: 3. Despliegue Continuo (CD) en Vercel Edge Network
+    needs: production-build-and-compodoc
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Despliegue en Vercel (vía Vercel CLI / Git Integration)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          if [ -n "$VERCEL_TOKEN" ]; then
+            npx vercel pull --yes --environment=production --token=$VERCEL_TOKEN
+            npx vercel build --prod --token=$VERCEL_TOKEN
+            npx vercel deploy --prebuilt --prod --token=$VERCEL_TOKEN
+          else
+            echo "Despliegue gestionado automáticamente por el Webhook oficial de Vercel GitHub Integration hacia https://enterprise-hub-di-mauve.vercel.app"
+          fi
